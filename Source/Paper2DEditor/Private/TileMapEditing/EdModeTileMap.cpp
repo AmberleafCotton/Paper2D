@@ -16,6 +16,7 @@
 #include "ScopedTransaction.h"
 #include "CanvasTypes.h"
 #include "PaperTileMap.h"
+#include "Paper2DEditorLog.h"
 
 #define LOCTEXT_NAMESPACE "Paper2D"
 
@@ -147,6 +148,7 @@ FEdModeTileMap::FEdModeTileMap()
 	, bIsStrokeActive(false)
 	, PreviewStrokeLayer(nullptr)
 	, ActiveTool(ETileMapEditorTool::Paintbrush)
+	, bPaintingCancelledByRightClick(false)
 {
 	bDrawPivot = false;
 	bDrawGrid = false;
@@ -186,6 +188,21 @@ void FEdModeTileMap::Enter()
 	CursorPreviewComponent->RegisterComponentWithWorld(World);
 	CursorPreviewComponent->SetMobility(EComponentMobility::Static);
 
+	StrokePreviewComponent = NewObject<UPaperTileMapComponent>();
+	StrokePreviewComponent->TileMap->InitializeNewEmptyTileMap();
+	StrokePreviewComponent->TranslucencySortPriority = 99998; // Just below cursor
+	StrokePreviewComponent->bShowPerTileGridWhenSelected = false;
+	StrokePreviewComponent->bShowPerTileGridWhenUnselected = false;
+	StrokePreviewComponent->bShowPerLayerGridWhenSelected = false;
+	StrokePreviewComponent->bShowPerLayerGridWhenUnselected = false;
+	StrokePreviewComponent->bShowOutlineWhenUnselected = false;
+	StrokePreviewComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	StrokePreviewComponent->UpdateBounds();
+	StrokePreviewComponent->AddToRoot();
+	StrokePreviewComponent->RegisterComponentWithWorld(World);
+	StrokePreviewComponent->SetMobility(EComponentMobility::Static);
+	StrokePreviewComponent->SetVisibility(false);
+
 	SetActiveTool(ETileMapEditorTool::Paintbrush);
 
 	if (!Toolkit.IsValid())
@@ -208,6 +225,13 @@ void FEdModeTileMap::Exit()
 	CursorPreviewComponent->RemoveFromRoot();
 	CursorPreviewComponent->UnregisterComponent();
 	CursorPreviewComponent = nullptr;
+
+	if (StrokePreviewComponent)
+	{
+		StrokePreviewComponent->RemoveFromRoot();
+		StrokePreviewComponent->UnregisterComponent();
+		StrokePreviewComponent = nullptr;
+	}
 
 	// Call base Exit method to ensure proper cleanup
 	FEdMode::Exit();
@@ -314,23 +338,27 @@ bool FEdModeTileMap::CapturedMouseMove(FEditorViewportClient* InViewportClient, 
 
 		if (bIsPainting)
 		{
+			UE_LOG(LogPaper2DEditor, VeryVerbose, TEXT("[CapturedMouseMove] bIsPainting=true, bIsStrokeActive=%d, bPaintingCancelledByRightClick=%d"), 
+				bIsStrokeActive, bPaintingCancelledByRightClick);
+			
 			// Only paint with paintbrush tool using preview system
 			if (GetActiveTool() == ETileMapEditorTool::Paintbrush)
 			{
+				// Don't start new strokes in CapturedMouseMove - only continue existing ones
+				// Strokes are initialized in InputKey() when left button is pressed
+				if (!bIsStrokeActive)
+				{
+					// No active stroke - user must release and re-press left button
+					// This prevents painting from resuming after right-click cancel
+					UE_LOG(LogPaper2DEditor, Warning, TEXT("[CapturedMouseMove] BLOCKED: No active stroke, bPaintingCancelledByRightClick=%d"), 
+						bPaintingCancelledByRightClick);
+					return true;
+				}
+
 				int32 CurrentTileX, CurrentTileY;
 				if (UPaperTileLayer* Layer = GetSelectedLayerUnderCursor(Ray, /*out*/ CurrentTileX, /*out*/ CurrentTileY))
 				{
 					FIntPoint CurrentTile(CurrentTileX, CurrentTileY);
-					
-					if (!bIsStrokeActive)
-					{
-						// Starting new stroke
-						bIsStrokeActive = true;
-						PreviewStrokeTiles.Empty();
-						OriginalStrokeTiles.Empty();
-						PreviewStrokeLayer = Layer;
-						bHasLastPaintedPosition = false;
-					}
 					
 					if (bHasLastPaintedPosition)
 					{
@@ -386,29 +414,132 @@ bool FEdModeTileMap::InputKey(FEditorViewportClient* InViewportClient, FViewport
 
 	if (InViewportClient->EngineShowFlags.ModeWidgets)
 	{
-		// Check for right-click cancel while painting
-		const bool bIsRightButtonPressed = (InKey == EKeys::RightMouseButton && InEvent == IE_Pressed);
-		
-		if (bIsRightButtonPressed && bIsPainting && bIsStrokeActive)
-		{
-			// User wants to cancel current stroke
-			CancelPreviewStroke();
-			bIsPainting = false;
-			bIsStrokeActive = false;
-			bHasLastPaintedPosition = false;
-			bHandled = true;
-		}
+		// Calculate ray early since we need it for stroke initialization
+		const FViewportCursorLocation Ray = CalculateViewRay(InViewportClient, InViewport);
 		
 		// Does the user want to paint right now?
 		bWasPainting = bIsPainting;
 		const bool bUserWantsPaint = bIsLeftButtonDown;
 		bool bAnyPaintAbleActorsUnderCursor = false;
-		bIsPainting = bUserWantsPaint;
+		
+		// Check for right-click cancel while painting (BEFORE updating bIsPainting)
+		const bool bIsRightButtonPressed = (InKey == EKeys::RightMouseButton && InEvent == IE_Pressed);
+		
+		if (bIsRightButtonPressed && bIsStrokeActive)
+		{
+			// User wants to cancel current stroke AND exit painting mode
+			UE_LOG(LogPaper2DEditor, Warning, TEXT("[InputKey] RIGHT-CLICK CANCEL: bIsStrokeActive=%d, bIsPainting=%d, bUserWantsPaint=%d"), 
+				bIsStrokeActive, bIsPainting, bUserWantsPaint);
+			
+			CancelPreviewStroke();
+			bIsPainting = false;  // Force exit painting mode (overrides left button state)
+			bIsStrokeActive = false;
+			bHasLastPaintedPosition = false;
+			bPaintingCancelledByRightClick = true;  // Prevent painting from resuming until left button is released
+			bHandled = true;
+			
+			UE_LOG(LogPaper2DEditor, Warning, TEXT("[InputKey] AFTER CANCEL: bIsPainting=%d, bPaintingCancelledByRightClick=%d"), 
+				bIsPainting, bPaintingCancelledByRightClick);
+		}
+		
+		// Clear the cancel flag when left button is released
+		if (InKey == EKeys::LeftMouseButton && InEvent == IE_Released)
+		{
+			if (bPaintingCancelledByRightClick)
+			{
+				UE_LOG(LogPaper2DEditor, Warning, TEXT("[InputKey] LEFT BUTTON RELEASED: Clearing bPaintingCancelledByRightClick"));
+			}
+			bPaintingCancelledByRightClick = false;
+		}
+		
+		// Update painting state, but respect the cancel flag
+		if (bPaintingCancelledByRightClick)
+		{
+			// Don't allow painting to resume if it was cancelled by right-click
+			bIsPainting = false;
+			UE_LOG(LogPaper2DEditor, Log, TEXT("[InputKey] Painting blocked by cancel flag: bUserWantsPaint=%d, bPaintingCancelledByRightClick=%d"), 
+				bUserWantsPaint, bPaintingCancelledByRightClick);
+		}
+		else
+		{
+			bIsPainting = bUserWantsPaint;
+		}
 
 		if (!bWasPainting && bIsPainting)
 		{
+			UE_LOG(LogPaper2DEditor, Warning, TEXT("[InputKey] STARTING TO PAINT: bWasPainting=%d -> bIsPainting=%d, bPaintingCancelledByRightClick=%d"), 
+				bWasPainting, bIsPainting, bPaintingCancelledByRightClick);
+			
 			// Starting to paint, record if Shift was down which indicates a select instead of the regular tool
 			bWasHoldingSelectWhenPaintingStarted = bIsShiftDown;
+			
+			// For Paintbrush tool, initialize stroke and paint first tile to preview
+			// This ensures single-click (without drag) works properly
+			if (GetActiveTool() == ETileMapEditorTool::Paintbrush)
+			{
+				int32 CurrentTileX, CurrentTileY;
+				if (UPaperTileLayer* Layer = GetSelectedLayerUnderCursor(Ray, /*out*/ CurrentTileX, /*out*/ CurrentTileY))
+				{
+					FIntPoint CurrentTile(CurrentTileX, CurrentTileY);
+					
+					// Initialize stroke
+					bIsStrokeActive = true;
+					PreviewStrokeTiles.Empty();
+					OriginalStrokeTiles.Empty();
+					PreviewStrokeLayer = Layer;
+					bHasLastPaintedPosition = false;
+
+					// Initialize visual preview
+					if (StrokePreviewComponent && PreviewStrokeLayer)
+					{
+						UPaperTileMap* TargetTileMap = PreviewStrokeLayer->GetTileMap();
+						
+						// Sync properties
+						StrokePreviewComponent->TileMap->TileWidth = TargetTileMap->TileWidth;
+						StrokePreviewComponent->TileMap->TileHeight = TargetTileMap->TileHeight;
+						StrokePreviewComponent->TileMap->PixelsPerUnrealUnit = TargetTileMap->PixelsPerUnrealUnit;
+						StrokePreviewComponent->TileMap->SeparationPerTileX = TargetTileMap->SeparationPerTileX;
+						StrokePreviewComponent->TileMap->SeparationPerTileY = TargetTileMap->SeparationPerTileY;
+						StrokePreviewComponent->TileMap->SeparationPerLayer = TargetTileMap->SeparationPerLayer;
+						StrokePreviewComponent->TileMap->Material = TargetTileMap->Material;
+						StrokePreviewComponent->TileMap->ProjectionMode = TargetTileMap->ProjectionMode;
+						
+						// Ensure map size matches
+						StrokePreviewComponent->TileMap->MapWidth = TargetTileMap->MapWidth;
+						StrokePreviewComponent->TileMap->MapHeight = TargetTileMap->MapHeight;
+						StrokePreviewComponent->TileMap->ResizeMap(TargetTileMap->MapWidth, TargetTileMap->MapHeight);
+
+						// Clear any existing tiles
+						StrokePreviewComponent->TileMap->TileLayers[0]->ResizeMap(TargetTileMap->MapWidth, TargetTileMap->MapHeight);
+						const FPaperTileInfo EmptyTile;
+						for (int32 Y = 0; Y < TargetTileMap->MapHeight; ++Y)
+						{
+							for (int32 X = 0; X < TargetTileMap->MapWidth; ++X)
+							{
+								StrokePreviewComponent->TileMap->TileLayers[0]->SetCell(X, Y, EmptyTile);
+							}
+						}
+
+						// Setup transform
+						UPaperTileMapComponent* TargetComponent = FindSelectedComponent();
+						if (TargetComponent)
+						{
+							StrokePreviewComponent->SetWorldLocation(TargetComponent->GetComponentLocation() + (PaperAxisZ * 0.1f)); // Slight offset to prevent z-fighting
+							StrokePreviewComponent->SetWorldRotation(TargetComponent->GetComponentRotation());
+							StrokePreviewComponent->SetWorldScale3D(TargetComponent->GetComponentScale());
+						}
+						
+						// Show it
+						StrokePreviewComponent->SetVisibility(true);
+						StrokePreviewComponent->MarkRenderStateDirty();
+					}
+					
+					// Paint first tile to preview (enables single-click placement)
+					PaintTileToPreview(CurrentTile, Layer);
+					LastPaintedTilePosition = CurrentTile;
+					bHasLastPaintedPosition = true;
+				}
+			}
 		}
 		else if (bWasPainting && !bIsPainting)
 		{
@@ -424,14 +555,18 @@ bool FEdModeTileMap::InputKey(FEditorViewportClient* InViewportClient, FViewport
 			InViewportClient->Viewport->SetPreCaptureMousePosFromSlateCursor();
 		}
 
-		const FViewportCursorLocation Ray = CalculateViewRay(InViewportClient, InViewport);
 
 		UpdatePreviewCursor(Ray);
 
 		if (bIsPainting && !bHandled)
 		{
 			bHandled = true;
-			bAnyPaintAbleActorsUnderCursor = UseActiveToolAtLocation(Ray);
+			// For Paintbrush tool, skip immediate painting - let preview system handle everything
+			// For other tools (Eraser, Fill, EyeDropper), use original behavior
+			if (GetActiveTool() != ETileMapEditorTool::Paintbrush)
+			{
+				bAnyPaintAbleActorsUnderCursor = UseActiveToolAtLocation(Ray);
+			}
 		}
 		bWasPainting = bIsPainting;
 	}
@@ -1706,10 +1841,20 @@ void FEdModeTileMap::PaintTileToPreview(const FIntPoint& TilePos, UPaperTileLaye
 			
 			// Store in preview map (NO SetCell here - optimization: batch on commit!)
 			PreviewStrokeTiles.Add(TargetTilePos, TileInfo);
+			
+			// Update the visual preview component immediately
+			if (StrokePreviewComponent && StrokePreviewComponent->TileMap->TileLayers.IsValidIndex(0))
+			{
+				StrokePreviewComponent->TileMap->TileLayers[0]->SetCell(TargetX, TargetY, TileInfo);
+			}
 		}
 	}
 	
 	// NO PostEditChange() here - only in CommitPreviewStroke() for performance
+	if (StrokePreviewComponent)
+	{
+		StrokePreviewComponent->MarkRenderStateDirty();
+	}
 }
 
 void FEdModeTileMap::PaintAlongLineToPreview(const FIntPoint& Start, const FIntPoint& End, UPaperTileLayer* Layer)
@@ -1765,27 +1910,41 @@ void FEdModeTileMap::CommitPreviewStroke()
 	PreviewStrokeTiles.Empty();
 	OriginalStrokeTiles.Empty();
 	PreviewStrokeLayer = nullptr;
+	
+	// Hide preview component
+	if (StrokePreviewComponent)
+	{
+		StrokePreviewComponent->SetVisibility(false);
+	}
 }
 
 void FEdModeTileMap::CancelPreviewStroke()
 {
 	if (PreviewStrokeTiles.Num() == 0 || !PreviewStrokeLayer)
 	{
+		UE_LOG(LogPaper2DEditor, Log, TEXT("[CancelPreviewStroke] No stroke to cancel"));
 		return;
 	}
 	
-	// Restore original tiles (no transaction needed - we're canceling)
-	for (const TPair<FIntPoint, FPaperTileInfo>& Pair : OriginalStrokeTiles)
-	{
-		PreviewStrokeLayer->SetCell(Pair.Key.X, Pair.Key.Y, Pair.Value);
-	}
+	UE_LOG(LogPaper2DEditor, Warning, TEXT("[CancelPreviewStroke] Canceling stroke with %d tiles"), PreviewStrokeTiles.Num());
 	
-	PreviewStrokeLayer->GetTileMap()->PostEditChange();
+	// During preview painting, we only modify the preview component, NOT the actual layer
+	// So there's nothing to restore - the actual layer was never changed
+	// We just need to clear the preview and hide the preview component
 	
 	// Clear stroke data
 	PreviewStrokeTiles.Empty();
 	OriginalStrokeTiles.Empty();
 	PreviewStrokeLayer = nullptr;
+
+	// Hide preview component
+	if (StrokePreviewComponent)
+	{
+		StrokePreviewComponent->SetVisibility(false);
+		StrokePreviewComponent->MarkRenderStateDirty();
+	}
+	
+	UE_LOG(LogPaper2DEditor, Warning, TEXT("[CancelPreviewStroke] Cancel complete - NO PostEditChange() called (nothing changed)"));
 }
 
 //////////////////////////////////////////////////////////////////////////

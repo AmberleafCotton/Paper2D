@@ -169,6 +169,10 @@ protected:
 	bool bWasHoldingSelectWhenPaintingStarted;
 	FIntPoint EyeDropperStart;
 	FIntRect LastEyeDropperBounds;
+	
+	// Flag to prevent painting from resuming after right-click cancel
+	// Set to true when right-click cancels painting, cleared when left button is released
+	bool bPaintingCancelledByRightClick;
 
 	//
 	FTransform DrawPreviewSpace;
@@ -203,6 +207,8 @@ protected:
 	TMap<FIntPoint, FPaperTileInfo> OriginalStrokeTiles;  // Original tiles before stroke (for undo)
 	bool bIsStrokeActive;  // True while dragging, false on release
 	UPaperTileLayer* PreviewStrokeLayer;  // Target layer for current stroke
+	// Visual preview component for the current stroke
+	UPaperTileMapComponent* StrokePreviewComponent;
 
 	//
 	ETileMapEditorTool::Type ActiveTool;
