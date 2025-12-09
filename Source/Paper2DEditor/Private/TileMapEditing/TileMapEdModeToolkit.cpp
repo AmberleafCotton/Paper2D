@@ -248,6 +248,11 @@ void FTileMapEdModeToolkit::BindCommands()
 		FCanExecuteAction(),
 		FIsActionChecked::CreateSP(this, &FTileMapEdModeToolkit::IsToolSelected, ETileMapEditorTool::TerrainBrush),
 		FIsActionButtonVisible::CreateSP(this, &FTileMapEdModeToolkit::DoesSelectedTileSetHaveTerrains));
+	ToolkitCommands->MapAction(
+		Commands.SelectTileTool,
+		FExecuteAction::CreateSP(this, &FTileMapEdModeToolkit::OnSelectTool, ETileMapEditorTool::SelectTile),
+		FCanExecuteAction(),
+		FIsActionChecked::CreateSP(this, &FTileMapEdModeToolkit::IsToolSelected, ETileMapEditorTool::SelectTile));
 
 	// Selection actions
 	ToolkitCommands->MapAction(
@@ -309,6 +314,7 @@ TSharedRef<SWidget> FTileMapEdModeToolkit::BuildToolBar() const
 		ToolsToolbar.AddToolBarButton(Commands.SelectEraserTool);
 		ToolsToolbar.AddToolBarButton(Commands.SelectFillTool);
 		ToolsToolbar.AddToolBarButton(Commands.SelectTerrainTool);
+		ToolsToolbar.AddToolBarButton(Commands.SelectTileTool);
 
 		//@TODO: TileMapTerrain: Ugly styling
 		FUIAction TerrainTypeDropdownAction;

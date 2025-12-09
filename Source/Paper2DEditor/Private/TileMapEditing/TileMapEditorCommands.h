@@ -33,6 +33,7 @@ public:
 	TSharedPtr<FUICommandInfo> SelectFillTool;
 	TSharedPtr<FUICommandInfo> SelectEyeDropperTool;
 	TSharedPtr<FUICommandInfo> SelectTerrainTool;
+	TSharedPtr<FUICommandInfo> SelectTileTool;
 
 	// Show toggles
 	TSharedPtr<FUICommandInfo> SetShowCollision;

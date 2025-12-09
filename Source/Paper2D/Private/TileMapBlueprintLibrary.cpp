@@ -45,3 +45,32 @@ FPaperTileInfo UTileMapBlueprintLibrary::MakeTile(int32 TileIndex, UPaperTileSet
 	return Result;
 }
 
+FPaperTileLayerMetadata UTileMapBlueprintLibrary::GetTileMetadata(UPaperTileLayer* Layer, int32 X, int32 Y)
+{
+	if (Layer != nullptr)
+	{
+		if (const FPaperTileLayerMetadata* Metadata = Layer->GetTileMetadata(X, Y))
+		{
+			return *Metadata;
+		}
+	}
+	return FPaperTileLayerMetadata();
+}
+
+void UTileMapBlueprintLibrary::SetTileMetadata(UPaperTileLayer* Layer, int32 X, int32 Y, const FPaperTileLayerMetadata& Metadata)
+{
+	if (Layer != nullptr)
+	{
+		Layer->SetTileMetadata(X, Y, Metadata);
+	}
+}
+
+bool UTileMapBlueprintLibrary::HasTileMetadata(UPaperTileLayer* Layer, int32 X, int32 Y)
+{
+	if (Layer != nullptr)
+	{
+		return Layer->HasTileMetadata(X, Y);
+	}
+	return false;
+}
+

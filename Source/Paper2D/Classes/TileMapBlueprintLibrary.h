@@ -6,8 +6,10 @@
 #include "TileMapBlueprintLibrary.generated.h"
 
 struct FPaperTileInfo;
+struct FPaperTileLayerMetadata;
 
 class UPaperTileSet;
+class UPaperTileLayer;
 
 /**
  * A collection of utility methods for working with tile map components
@@ -35,4 +37,16 @@ public:
 	// Creates a tile from the specified information
 	UFUNCTION(BlueprintPure, Category=Sprite, meta=(AdvancedDisplay=2))
 	static FPaperTileInfo MakeTile(int32 TileIndex, UPaperTileSet* TileSet, bool bFlipH, bool bFlipV, bool bFlipD);
+
+	// Get metadata for tile at X, Y in layer
+	UFUNCTION(BlueprintCallable, Category="Paper2D|Tile Map", meta=(CallInEditor="true"))
+	static FPaperTileLayerMetadata GetTileMetadata(UPaperTileLayer* Layer, int32 X, int32 Y);
+
+	// Set metadata for tile at X, Y in layer
+	UFUNCTION(BlueprintCallable, Category="Paper2D|Tile Map", meta=(CallInEditor="true"))
+	static void SetTileMetadata(UPaperTileLayer* Layer, int32 X, int32 Y, const FPaperTileLayerMetadata& Metadata);
+
+	// Check if tile has metadata
+	UFUNCTION(BlueprintPure, Category="Paper2D|Tile Map")
+	static bool HasTileMetadata(UPaperTileLayer* Layer, int32 X, int32 Y);
 };

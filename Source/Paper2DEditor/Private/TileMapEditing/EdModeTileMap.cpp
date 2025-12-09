@@ -149,6 +149,9 @@ FEdModeTileMap::FEdModeTileMap()
 	, PreviewStrokeLayer(nullptr)
 	, ActiveTool(ETileMapEditorTool::Paintbrush)
 	, bPaintingCancelledByRightClick(false)
+	, SelectedTilePosition(0, 0)
+	, SelectedTileLayerIndex(INDEX_NONE)
+	, bHasSelectedTile(false)
 {
 	bDrawPivot = false;
 	bDrawGrid = false;
@@ -417,6 +420,39 @@ bool FEdModeTileMap::InputKey(FEditorViewportClient* InViewportClient, FViewport
 		// Calculate ray early since we need it for stroke initialization
 		const FViewportCursorLocation Ray = CalculateViewRay(InViewportClient, InViewport);
 		
+		// Handle tile selection (SelectTile tool)
+		if (GetActiveTool() == ETileMapEditorTool::SelectTile)
+		{
+			if (InKey == EKeys::LeftMouseButton && InEvent == IE_Pressed)
+			{
+				int32 TileX, TileY;
+				if (UPaperTileLayer* Layer = GetSelectedLayerUnderCursor(Ray, /*out*/ TileX, /*out*/ TileY))
+				{
+					SelectedTilePosition = FIntPoint(TileX, TileY);
+					SelectedTileLayerIndex = Layer->GetLayerIndex();
+					bHasSelectedTile = true;
+					bHandled = true;
+					
+					// Notify details panel to refresh
+					// This will be handled by the details customization
+				}
+				else
+				{
+					// Clicked on empty space - clear selection
+					bHasSelectedTile = false;
+					SelectedTileLayerIndex = INDEX_NONE;
+					bHandled = true;
+				}
+			}
+		}
+		
+		// Clear selection when switching tools (except when switching to SelectTile)
+		if (GetActiveTool() != ETileMapEditorTool::SelectTile && bHasSelectedTile)
+		{
+			bHasSelectedTile = false;
+			SelectedTileLayerIndex = INDEX_NONE;
+		}
+		
 		// Does the user want to paint right now?
 		bWasPainting = bIsPainting;
 		const bool bUserWantsPaint = bIsLeftButtonDown;
@@ -477,6 +513,15 @@ bool FEdModeTileMap::InputKey(FEditorViewportClient* InViewportClient, FViewport
 			// This ensures single-click (without drag) works properly
 			if (GetActiveTool() == ETileMapEditorTool::Paintbrush)
 			{
+				// Check if tool is ready (has valid tile selection) before initializing stroke
+				if (!IsToolReadyToBeUsed())
+				{
+					// No valid selection - don't initialize stroke, just return
+					UE_LOG(LogPaper2DEditor, Log, TEXT("[InputKey] Paintbrush tool not ready - no valid tile selection, skipping stroke initialization"));
+					bIsPainting = false;  // Cancel painting since we can't proceed
+					return true;  // Handled, but no action taken
+				}
+				
 				int32 CurrentTileX, CurrentTileY;
 				if (UPaperTileLayer* Layer = GetSelectedLayerUnderCursor(Ray, /*out*/ CurrentTileX, /*out*/ CurrentTileY))
 				{
@@ -640,6 +685,37 @@ void FEdModeTileMap::Render(const FSceneView* View, FViewport* Viewport, FPrimit
 			}
 		}
 	}
+	
+	// Draw selected tile highlight
+	if (bHasSelectedTile)
+	{
+		UPaperTileMapComponent* TileMapComponent = FindSelectedComponent();
+		if (TileMapComponent && TileMapComponent->TileMap)
+		{
+			UPaperTileMap* TileMap = TileMapComponent->TileMap;
+			if (TileMap->TileLayers.IsValidIndex(SelectedTileLayerIndex))
+			{
+				// Get tile polygon for drawing
+				TArray<FVector> TilePolygon;
+				TileMap->GetTilePolygon(SelectedTilePosition.X, SelectedTilePosition.Y, SelectedTileLayerIndex, TilePolygon);
+				
+				// Draw yellow outline box
+				const float DepthBias = 0.0002f;
+				const FLinearColor SelectionColor = FLinearColor::Yellow;
+				
+				if (TilePolygon.Num() > 0)
+				{
+					FVector LastPositionWS = ComponentToWorld.TransformPosition(TilePolygon[TilePolygon.Num() - 1]);
+					for (int32 VertexIndex = 0; VertexIndex < TilePolygon.Num(); ++VertexIndex)
+					{
+						const FVector ThisPositionWS = ComponentToWorld.TransformPosition(TilePolygon[VertexIndex]);
+						PDI->DrawLine(LastPositionWS, ThisPositionWS, SelectionColor, SDPG_Foreground, 2.0f, DepthBias);
+						LastPositionWS = ThisPositionWS;
+					}
+				}
+			}
+		}
+	}
 }
 
 void FEdModeTileMap::DrawHUD(FEditorViewportClient* ViewportClient, FViewport* Viewport, const FSceneView* View, FCanvas* Canvas)
@@ -687,6 +763,10 @@ void FEdModeTileMap::DrawHUD(FEditorViewportClient* ViewportClient, FViewport* V
 		break;
 	case ETileMapEditorTool::TerrainBrush:
 		ToolDescription = LOCTEXT("TerrainTool", "Terrain"); //@TODO: TileMapTerrain: Show the current terrain name?
+		bDrawToolDescription = true;
+		break;
+	case ETileMapEditorTool::SelectTile:
+		ToolDescription = LOCTEXT("SelectTileTool", "Select Tile");
 		bDrawToolDescription = true;
 		break;
 	}
@@ -883,6 +963,9 @@ bool FEdModeTileMap::UseActiveToolAtLocation(const FViewportCursorLocation& Ray)
 		return FloodFillTiles(Ray);
 	case ETileMapEditorTool::TerrainBrush:
 		return PaintTilesWithTerrain(Ray);
+	case ETileMapEditorTool::SelectTile:
+		// Selection is handled in InputKey, not here
+		return false;
 	default:
 		check(false);
 		return false;
@@ -1532,6 +1615,9 @@ bool FEdModeTileMap::IsToolReadyToBeUsed() const
 	case ETileMapEditorTool::TerrainBrush:
 		bToolIsReadyToDraw = bHasValidInkSource; //@TODO: TileMapTerrain: What to do here...
 		break;
+	case ETileMapEditorTool::SelectTile:
+		bToolIsReadyToDraw = true; // Always ready - just needs to click on tile
+		break;
 	default:
 		check(false);
 		break;
@@ -1660,6 +1746,12 @@ void FEdModeTileMap::SetActiveTool(ETileMapEditorTool::Type NewTool)
 
 ETileMapEditorTool::Type FEdModeTileMap::GetActiveTool() const
 {
+	// Don't override SelectTile tool with EyeDropper
+	if (ActiveTool == ETileMapEditorTool::SelectTile)
+	{
+		return ActiveTool;
+	}
+	
 	// Force the eyedropper active when Shift is held (or if it was held when painting started, even if it was released later)
 	const bool bHoldingShift = !bIsPainting && FSlateApplication::Get().GetModifierKeys().IsShiftDown();
 	const bool bWasHoldingShift = bIsPainting && bWasHoldingSelectWhenPaintingStarted;
@@ -1686,6 +1778,9 @@ int32 FEdModeTileMap::GetBrushWidth() const
 		BrushWidth = GetSourceInkLayer()->GetLayerWidth();
 		break;
 	case ETileMapEditorTool::TerrainBrush:
+		BrushWidth = 1;
+		break;
+	case ETileMapEditorTool::SelectTile:
 		BrushWidth = 1;
 		break;
 	default:
@@ -1715,6 +1810,9 @@ int32 FEdModeTileMap::GetBrushHeight() const
 		BrushHeight = GetSourceInkLayer()->GetLayerHeight();
 		break;
 	case ETileMapEditorTool::TerrainBrush:
+		BrushHeight = 1;
+		break;
+	case ETileMapEditorTool::SelectTile:
 		BrushHeight = 1;
 		break;
 	default:
@@ -1757,6 +1855,9 @@ void FEdModeTileMap::RefreshBrushSize()
 		break;
 	case ETileMapEditorTool::TerrainBrush:
 		CursorPreviewComponent->SetVisibility(bShowPreviewDesired); //@TODO: TileMapTerrain
+		break;
+	case ETileMapEditorTool::SelectTile:
+		CursorPreviewComponent->SetVisibility(false); // No preview cursor for selection tool
 		break;
 	default:
 		check(false);

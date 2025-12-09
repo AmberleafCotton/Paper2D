@@ -180,6 +180,51 @@ void UPaperTileLayer::SetCell(int32 X, int32 Y, const FPaperTileInfo& NewValue)
 	}
 }
 
+FPaperTileLayerMetadata* UPaperTileLayer::GetTileMetadata(int32 X, int32 Y)
+{
+	if (InBounds(X, Y))
+	{
+		FPaperTileInfo& TileInfo = AllocatedCells[X + (Y * LayerWidth)];
+		if (TileInfo.Metadata.IsSet())
+		{
+			return &TileInfo.Metadata.GetValue();
+		}
+	}
+	return nullptr;
+}
+
+const FPaperTileLayerMetadata* UPaperTileLayer::GetTileMetadata(int32 X, int32 Y) const
+{
+	if (InBounds(X, Y))
+	{
+		const FPaperTileInfo& TileInfo = AllocatedCells[X + (Y * LayerWidth)];
+		if (TileInfo.Metadata.IsSet())
+		{
+			return &TileInfo.Metadata.GetValue();
+		}
+	}
+	return nullptr;
+}
+
+void UPaperTileLayer::SetTileMetadata(int32 X, int32 Y, const FPaperTileLayerMetadata& Metadata)
+{
+	if (InBounds(X, Y))
+	{
+		FPaperTileInfo& TileInfo = AllocatedCells[X + (Y * LayerWidth)];
+		TileInfo.Metadata = Metadata;
+	}
+}
+
+bool UPaperTileLayer::HasTileMetadata(int32 X, int32 Y) const
+{
+	if (InBounds(X, Y))
+	{
+		const FPaperTileInfo& TileInfo = AllocatedCells[X + (Y * LayerWidth)];
+		return TileInfo.Metadata.IsSet();
+	}
+	return false;
+}
+
 void UPaperTileLayer::AugmentBodySetup(UBodySetup* ShapeBodySetup, float RenderSeparation)
 {
 	if (!bLayerCollides)

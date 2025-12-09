@@ -28,6 +28,12 @@
 #include "ScopedTransaction.h"
 #include "IPropertyUtilities.h"
 #include "Subsystems/AssetEditorSubsystem.h"
+#include "EditorModeManager.h"
+#include "DetailCategoryBuilder.h"
+#include "DetailWidgetRow.h"
+#include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SCheckBox.h"
+#include "PropertyCustomizationHelpers.h"
 
 #define LOCTEXT_NAMESPACE "Paper2D"
 
@@ -309,7 +315,152 @@ void FPaperTileMapDetailsCustomization::CustomizeDetails(IDetailLayoutBuilder& D
 		}
 	}
 
+	// Add Tile Details section when a tile is selected in edit mode
+	if (TileMap != nullptr && GLevelEditorModeTools().IsModeActive(FEdModeTileMap::EM_TileMap))
+	{
+		FEdModeTileMap* TileMapEdMode = (FEdModeTileMap*)GLevelEditorModeTools().GetActiveMode(FEdModeTileMap::EM_TileMap);
+		if (TileMapEdMode && TileMapEdMode->HasSelectedTile())
+		{
+			AddTileDetailsSection(DetailLayout, TileMap, TileMapEdMode);
+		}
+	}
+
 	MyDetailLayout = &DetailLayout;
+}
+
+void FPaperTileMapDetailsCustomization::AddTileDetailsSection(IDetailLayoutBuilder& DetailLayout, UPaperTileMap* TileMap, FEdModeTileMap* TileMapEdMode)
+{
+	if (!TileMap || !TileMapEdMode)
+	{
+		return;
+	}
+
+	const FIntPoint SelectedPos = TileMapEdMode->GetSelectedTilePosition();
+	const int32 SelectedLayerIndex = TileMapEdMode->GetSelectedTileLayerIndex();
+
+	if (!TileMap->TileLayers.IsValidIndex(SelectedLayerIndex))
+	{
+		return;
+	}
+
+	UPaperTileLayer* SelectedLayer = TileMap->TileLayers[SelectedLayerIndex];
+	FPaperTileInfo TileInfo = SelectedLayer->GetCell(SelectedPos.X, SelectedPos.Y);
+
+	// Create Tile Details category
+	IDetailCategoryBuilder& TileDetailsCategory = DetailLayout.EditCategory(
+		TEXT("TileDetails"),
+		LOCTEXT("TileDetailsCategory", "Tile Details"),
+		ECategoryPriority::Important
+	);
+
+	// Tile Position
+	TileDetailsCategory.AddCustomRow(LOCTEXT("TilePosition", "Position"))
+	.NameContent()
+	[
+		SNew(STextBlock)
+		.Text(LOCTEXT("TilePositionLabel", "Position"))
+		.Font(DetailLayout.GetDetailFont())
+	]
+	.ValueContent()
+	[
+		SNew(STextBlock)
+		.Text(FText::Format(LOCTEXT("TilePositionValue", "({0}, {1}), Layer {2}"),
+			FText::AsNumber(SelectedPos.X),
+			FText::AsNumber(SelectedPos.Y),
+			FText::AsNumber(SelectedLayerIndex)))
+		.Font(DetailLayout.GetDetailFont())
+	];
+
+	// Tile Info
+	if (TileInfo.IsValid())
+	{
+		TileDetailsCategory.AddCustomRow(LOCTEXT("TileInfo", "Tile Info"))
+		.NameContent()
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("TileInfoLabel", "Tile Info"))
+			.Font(DetailLayout.GetDetailFont())
+		]
+		.ValueContent()
+		[
+			SNew(STextBlock)
+			.Text(FText::Format(LOCTEXT("TileInfoValue", "TileSet: {0}, Index: {1}"),
+				FText::FromString(TileInfo.TileSet ? TileInfo.TileSet->GetName() : TEXT("None")),
+				FText::AsNumber(TileInfo.GetTileIndex())))
+			.Font(DetailLayout.GetDetailFont())
+		];
+
+		// Metadata section
+		FPaperTileLayerMetadata* Metadata = SelectedLayer->GetTileMetadata(SelectedPos.X, SelectedPos.Y);
+		if (Metadata)
+		{
+			// Tile Type
+			TileDetailsCategory.AddCustomRow(LOCTEXT("TileType", "Tile Type"))
+			.NameContent()
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("TileTypeLabel", "Tile Type"))
+				.Font(DetailLayout.GetDetailFont())
+			]
+			.ValueContent()
+			[
+				SNew(SEditableTextBox)
+				.Text(FText::FromName(Metadata->TileType))
+				.OnTextCommitted_Lambda([SelectedLayer, SelectedPos, Metadata, &DetailLayout](const FText& NewText, ETextCommit::Type CommitType)
+				{
+					if (CommitType != ETextCommit::OnCleared)
+					{
+						FScopedTransaction Transaction(LOCTEXT("EditTileMetadata", "Edit Tile Metadata"));
+						SelectedLayer->Modify();
+						Metadata->TileType = FName(*NewText.ToString());
+						SelectedLayer->SetTileMetadata(SelectedPos.X, SelectedPos.Y, *Metadata);
+						DetailLayout.ForceRefreshDetails();
+					}
+				})
+			];
+
+			// Is Walkable
+			TileDetailsCategory.AddCustomRow(LOCTEXT("IsWalkable", "Is Walkable"))
+			.NameContent()
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("IsWalkableLabel", "Is Walkable"))
+				.Font(DetailLayout.GetDetailFont())
+			]
+			.ValueContent()
+			[
+				SNew(SCheckBox)
+				.IsChecked(Metadata->bIsWalkable ? ECheckBoxState::Checked : ECheckBoxState::Unchecked)
+				.OnCheckStateChanged_Lambda([SelectedLayer, SelectedPos, Metadata, &DetailLayout](ECheckBoxState NewState)
+				{
+					FScopedTransaction Transaction(LOCTEXT("EditTileMetadata", "Edit Tile Metadata"));
+					SelectedLayer->Modify();
+					Metadata->bIsWalkable = (NewState == ECheckBoxState::Checked);
+					SelectedLayer->SetTileMetadata(SelectedPos.X, SelectedPos.Y, *Metadata);
+					DetailLayout.ForceRefreshDetails();
+				})
+			];
+		}
+		else
+		{
+			// No metadata - add button to create it
+			TileDetailsCategory.AddCustomRow(LOCTEXT("CreateMetadata", "Create Metadata"))
+			.ValueContent()
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("CreateMetadataButton", "Create Metadata"))
+				.OnClicked_Lambda([SelectedLayer, SelectedPos, &DetailLayout]() -> FReply
+				{
+					FScopedTransaction Transaction(LOCTEXT("CreateTileMetadata", "Create Tile Metadata"));
+					SelectedLayer->Modify();
+					FPaperTileLayerMetadata NewMetadata;
+					SelectedLayer->SetTileMetadata(SelectedPos.X, SelectedPos.Y, NewMetadata);
+					DetailLayout.ForceRefreshDetails();
+					return FReply::Handled();
+				})
+			];
+		}
+	}
 }
 
 FReply FPaperTileMapDetailsCustomization::EnterTileMapEditingMode()

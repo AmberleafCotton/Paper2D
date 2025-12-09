@@ -23,7 +23,8 @@ namespace ETileMapEditorTool
 		Eraser,
 		PaintBucket,
 		EyeDropper,
-		TerrainBrush
+		TerrainBrush,
+		SelectTile
 	};
 }
 
@@ -90,6 +91,11 @@ public:
 
 	void SetActiveTool(ETileMapEditorTool::Type NewTool);
 	ETileMapEditorTool::Type GetActiveTool() const;
+
+	// Tile selection accessors (for details panel)
+	bool HasSelectedTile() const { return bHasSelectedTile; }
+	FIntPoint GetSelectedTilePosition() const { return SelectedTilePosition; }
+	int32 GetSelectedTileLayerIndex() const { return SelectedTileLayerIndex; }
 
 	void SetActivePaint(UPaperTileSet* TileSet, FIntPoint TopLeft, FIntPoint Dimensions);
 	void SetActivePaintFromLayer(UPaperTileLayer* SourceLayer, FIntPoint TopLeft, FIntPoint Dimensions);
@@ -173,6 +179,11 @@ protected:
 	// Flag to prevent painting from resuming after right-click cancel
 	// Set to true when right-click cancels painting, cleared when left button is released
 	bool bPaintingCancelledByRightClick;
+
+	// Tile selection state (for metadata editing)
+	FIntPoint SelectedTilePosition;
+	int32 SelectedTileLayerIndex;
+	bool bHasSelectedTile;
 
 	//
 	FTransform DrawPreviewSpace;

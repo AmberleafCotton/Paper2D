@@ -21,6 +21,27 @@ enum class EPaperTileFlags : uint32
 	TileIndexMask = ~(7U << 29),
 };
 
+// Per-tile metadata for custom properties
+USTRUCT(BlueprintType)
+struct FPaperTileLayerMetadata
+{
+	GENERATED_BODY()
+
+	// Tile type (grass, dirt, stone, etc.)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tile Properties")
+	FName TileType;
+
+	// Is this tile walkable?
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tile Properties")
+	bool bIsWalkable;
+
+	FPaperTileLayerMetadata()
+		: TileType(NAME_None)
+		, bIsWalkable(true)
+	{
+	}
+};
+
 // This is the contents of a tile map cell
 USTRUCT(BlueprintType, meta=(HasNativeBreak="/Script/Paper2D.TileMapBlueprintLibrary.BreakTile", HasNativeMake="/Script/Paper2D.TileMapBlueprintLibrary.MakeTile"))
 struct FPaperTileInfo
@@ -34,6 +55,10 @@ struct FPaperTileInfo
 	// This is the index of the current tile within the tile set
 	UPROPERTY(EditAnywhere, Category=Sprite)
 	int32 PackedTileIndex;
+
+	// Optional per-tile metadata
+	UPROPERTY(EditAnywhere, Category = "Metadata")
+	TOptional<FPaperTileLayerMetadata> Metadata;
 
 	FPaperTileInfo()
 		: TileSet(nullptr)
@@ -251,6 +276,16 @@ public:
 	{
 		return AllocatedCells.GetData();
 	}
+
+	// Get metadata for tile at X, Y (returns nullptr if no metadata)
+	UE_API FPaperTileLayerMetadata* GetTileMetadata(int32 X, int32 Y);
+	const FPaperTileLayerMetadata* GetTileMetadata(int32 X, int32 Y) const;
+
+	// Set metadata for tile at X, Y
+	UE_API void SetTileMetadata(int32 X, int32 Y, const FPaperTileLayerMetadata& Metadata);
+
+	// Check if tile has metadata
+	UE_API bool HasTileMetadata(int32 X, int32 Y) const;
 
 	void SetLayerCollides(bool bShouldCollide) { bLayerCollides = bShouldCollide; }
 	

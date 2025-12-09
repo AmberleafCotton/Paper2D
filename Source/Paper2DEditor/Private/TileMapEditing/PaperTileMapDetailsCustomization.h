@@ -7,8 +7,10 @@
 
 class FReply;
 struct EVisibility;
+class FEdModeTileMap;
 
 class IDetailLayoutBuilder;
+class UPaperTileMap;
 
 //////////////////////////////////////////////////////////////////////////
 // FPaperTileMapDetailsCustomization
@@ -51,4 +53,6 @@ private:
 	void OnSelectedLayerChanged();
 
 	FText GetLayerSettingsHeadingText() const;
+
+	void AddTileDetailsSection(IDetailLayoutBuilder& DetailLayout, class UPaperTileMap* TileMap, class FEdModeTileMap* TileMapEdMode);
 };
